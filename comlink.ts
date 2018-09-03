@@ -197,6 +197,21 @@ export function proxyValue<T>(obj: T): T {
   return obj;
 }
 
+const exposedItems = new Map<Exposable, { endpoint: Endpoint, callback: (event: MessageEvent) => void }>();
+
+export function unexpose(rootObj: Exposable) {
+    if (exposedItems.has(rootObj)) {
+        const { endpoint, callback } = exposedItems.get(rootObj)!;
+        if (endpoint && callback) {
+            detachMessageHandler(endpoint, callback);
+            if (isMessagePort(endpoint)) {
+              endpoint.close();
+            }
+            exposedItems.delete(rootObj);
+        }
+    }
+}
+
 export function expose(
   rootObj: Exposable,
   endpoint: Endpoint | Window
@@ -208,7 +223,7 @@ export function expose(
     );
 
   activateEndpoint(endpoint);
-  attachMessageHandler(endpoint, async function(event: MessageEvent) {
+  const callback = async function(event: MessageEvent) {
     if (!event.data.id || !event.data.callPath) return;
     const irequest = event.data as InvocationRequest;
     let that = await irequest.callPath
@@ -253,7 +268,9 @@ export function expose(
       iresult,
       transferableProperties([iresult])
     );
-  });
+  }
+  exposedItems.set(rootObj, { endpoint, callback });
+  attachMessageHandler(endpoint, callback);
 }
 
 function wrapValue(arg: {}): WrappedValue {

@@ -25,4 +25,5 @@ export interface TransferHandler {
 export declare const transferHandlers: Map<string, TransferHandler>;
 export declare function proxy(endpoint: Endpoint | Window, target?: any): Proxy;
 export declare function proxyValue<T>(obj: T): T;
+export declare function unexpose(rootObj: Exposable): void;
 export declare function expose(rootObj: Exposable, endpoint: Endpoint | Window): void;

@@ -60,13 +60,26 @@ export function proxyValue(obj) {
     obj[proxyValueSymbol] = true;
     return obj;
 }
+const exposedItems = new Map();
+export function unexpose(rootObj) {
+    if (exposedItems.has(rootObj)) {
+        const { endpoint, callback } = exposedItems.get(rootObj);
+        if (endpoint && callback) {
+            detachMessageHandler(endpoint, callback);
+            if (isMessagePort(endpoint)) {
+                endpoint.close();
+            }
+            exposedItems.delete(rootObj);
+        }
+    }
+}
 export function expose(rootObj, endpoint) {
     if (isWindow(endpoint))
         endpoint = windowEndpoint(endpoint);
     if (!isEndpoint(endpoint))
         throw Error("endpoint does not have all of addEventListener, removeEventListener and postMessage defined");
     activateEndpoint(endpoint);
-    attachMessageHandler(endpoint, async function (event) {
+    const callback = async function (event) {
         if (!event.data.id || !event.data.callPath)
             return;
         const irequest = event.data;
@@ -106,7 +119,9 @@ export function expose(rootObj, endpoint) {
         iresult = makeInvocationResult(iresult);
         iresult.id = irequest.id;
         return endpoint.postMessage(iresult, transferableProperties([iresult]));
-    });
+    };
+    exposedItems.set(rootObj, { endpoint, callback });
+    attachMessageHandler(endpoint, callback);
 }
 function wrapValue(arg) {
     // Is arg itself handled by a TransferHandler?

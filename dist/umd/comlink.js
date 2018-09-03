@@ -74,13 +74,27 @@ else {factory([], self.Comlink={});}
         return obj;
     }
     exports.proxyValue = proxyValue;
+    const exposedItems = new Map();
+    function unexpose(rootObj) {
+        if (exposedItems.has(rootObj)) {
+            const { endpoint, callback } = exposedItems.get(rootObj);
+            if (endpoint && callback) {
+                detachMessageHandler(endpoint, callback);
+                if (isMessagePort(endpoint)) {
+                    endpoint.close();
+                }
+                exposedItems.delete(rootObj);
+            }
+        }
+    }
+    exports.unexpose = unexpose;
     function expose(rootObj, endpoint) {
         if (isWindow(endpoint))
             endpoint = windowEndpoint(endpoint);
         if (!isEndpoint(endpoint))
             throw Error("endpoint does not have all of addEventListener, removeEventListener and postMessage defined");
         activateEndpoint(endpoint);
-        attachMessageHandler(endpoint, async function (event) {
+        const callback = async function (event) {
             if (!event.data.id || !event.data.callPath)
                 return;
             const irequest = event.data;
@@ -120,7 +134,9 @@ else {factory([], self.Comlink={});}
             iresult = makeInvocationResult(iresult);
             iresult.id = irequest.id;
             return endpoint.postMessage(iresult, transferableProperties([iresult]));
-        });
+        };
+        exposedItems.set(rootObj, { endpoint, callback });
+        attachMessageHandler(endpoint, callback);
     }
     exports.expose = expose;
     function wrapValue(arg) {
