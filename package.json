@@ -2,9 +2,9 @@
   "name": "comlinkjs",
   "version": "3.0.2",
   "description": "",
-  "main": "comlink.js",
-  "module": "comlink.js",
-  "types": "comlink.d.ts",
+  "main": "dist/comlink.js",
+  "module": "dist/comlink.js",
+  "types": "dist/comlink.d.ts",
   "scripts": {
     "test": "npm run linter && npm run unittest && npm run build",
     "unittest": "karma start",
