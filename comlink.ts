@@ -60,6 +60,8 @@ type ProxiedObject<T> = {
     : (T[P] extends ProxyValue
         ? ProxiedObject<Omit<T[P], keyof ProxyValue>>
         : Promisify<T[P]>)
+} & {
+  releaseProxy: () => Promise<void>;
 };
 
 /**
@@ -69,7 +71,7 @@ type ProxiedObject<T> = {
 export type ProxyResult<T> = ProxiedObject<T> &
   (T extends (...args: infer Arguments) => infer R
     ? (...args: Arguments) => Promisify<R>
-    : unknown) &
+    : unknown) & 
   (T extends { new (...args: infer ArgumentsType): infer InstanceType }
     ? { new (...args: ArgumentsType): Promisify<ProxiedObject<InstanceType>> }
     : unknown);
@@ -111,6 +113,7 @@ type CBProxyCallbackDescriptor =
   | CBPCDGet
   | CBPCDApply
   | CBPCDConstruct
+  | CBPCDRelease
   | CBPCDSet; // eslint-disable-line no-unused-vars
 
 interface CBPCDGet {
@@ -130,6 +133,11 @@ interface CBPCDConstruct {
   argumentsList: {}[];
 }
 
+interface CBPCDRelease {
+  type: "RELEASE";
+  callPath: PropertyKey[];
+}
+
 interface CBPCDSet {
   type: "SET";
   callPath: PropertyKey[];
@@ -141,7 +149,8 @@ type InvocationRequest =
   | GetInvocationRequest
   | ApplyInvocationRequest
   | ConstructInvocationRequest
-  | SetInvocationRequest;
+  | SetInvocationRequest
+  | ReleaseInovcationRequest;
 
 interface GetInvocationRequest {
   id?: string;
@@ -169,6 +178,12 @@ interface SetInvocationRequest {
   callPath: PropertyKey[];
   property: PropertyKey;
   value: WrappedValue;
+}
+
+interface ReleaseInovcationRequest {
+  id?: string;
+  type: "RELEASE";
+  callPath: PropertyKey[];
 }
 
 export interface TransferHandler {
@@ -235,6 +250,10 @@ export function proxy<T = any>(
         Object.assign({}, irequest, { argumentsList: args }),
         transferableProperties(args)
       );
+      if (irequest.type === "RELEASE") {
+        deactiveEndPoint(endpoint as Endpoint);
+      }
+
       const result = response.data as InvocationResult;
       return unwrapValue(result.value);
     },
@@ -257,9 +276,10 @@ export function expose(rootObj: Exposable, endpoint: Endpoint | Window): void {
     );
 
   activateEndpoint(endpoint);
-  attachMessageHandler(endpoint, async function(event: MessageEvent) {
+  async function callback(event: MessageEvent) {
     if (!event.data.id || !event.data.callPath) return;
     const irequest = event.data as InvocationRequest;
+
     let that = await irequest.callPath
       .slice(0, -1)
       .reduce((obj, propName) => obj[propName], rootObj as any);
@@ -295,14 +315,24 @@ export function expose(rootObj: Exposable, endpoint: Endpoint | Window): void {
       // boolean. To show good will, we return true asynchronously ¯\_(ツ)_/¯
       iresult = true;
     }
-
+    if (irequest.type === "RELEASE") {
+      // nothing returned in release result.
+      iresult = undefined;
+    }
     iresult = makeInvocationResult(iresult);
     iresult.id = irequest.id;
-    return (endpoint as Endpoint).postMessage(
+    const result = (endpoint as Endpoint).postMessage(
       iresult,
       transferableProperties([iresult])
     );
-  });
+    if (irequest.type === "RELEASE") {
+      // detached and deactive after send release response above.
+      detachMessageHandler(endpoint as Endpoint, callback);
+      deactiveEndPoint(endpoint as Endpoint);
+    }
+    return result;
+  }
+  attachMessageHandler(endpoint, callback);
 }
 
 function wrapValue(arg: {}): WrappedValue {
@@ -404,6 +434,10 @@ function activateEndpoint(endpoint: Endpoint): void {
   if (isMessagePort(endpoint)) endpoint.start();
 }
 
+function deactiveEndPoint(endpoint: Endpoint) {
+  if (isMessagePort(endpoint)) endpoint.close();
+}
+
 function attachMessageHandler(
   endpoint: Endpoint,
   f: (e: MessageEvent) => void
@@ -489,6 +523,14 @@ function cbProxy(
       });
     },
     get(_target, property, proxy) {
+      if (property === "releaseProxy") {
+        return () => {
+          return cb({
+            type: "RELEASE",
+            callPath,
+          });
+        };
+      }
       if (property === "then" && callPath.length === 0) {
         return { then: () => proxy };
       } else if (property === "then") {

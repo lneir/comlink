@@ -73,6 +73,9 @@ else {factory([], self.Comlink={});}
             if (irequest.type === "APPLY" || irequest.type === "CONSTRUCT")
                 args = irequest.argumentsList.map(wrapValue);
             const response = await pingPongMessage(endpoint, Object.assign({}, irequest, { argumentsList: args }), transferableProperties(args));
+            if (irequest.type === "RELEASE") {
+                deactiveEndPoint(endpoint);
+            }
             const result = response.data;
             return unwrapValue(result.value);
         }, [], target);
@@ -90,7 +93,7 @@ else {factory([], self.Comlink={});}
         if (!isEndpoint(endpoint))
             throw Error("endpoint does not have all of addEventListener, removeEventListener and postMessage defined");
         activateEndpoint(endpoint);
-        attachMessageHandler(endpoint, async function (event) {
+        async function callback(event) {
             if (!event.data.id || !event.data.callPath)
                 return;
             const irequest = event.data;
@@ -127,10 +130,21 @@ else {factory([], self.Comlink={});}
                 // boolean. To show good will, we return true asynchronously ¯\_(ツ)_/¯
                 iresult = true;
             }
+            if (irequest.type === "RELEASE") {
+                // nothing returned in release result.
+                iresult = undefined;
+            }
             iresult = makeInvocationResult(iresult);
             iresult.id = irequest.id;
-            return endpoint.postMessage(iresult, transferableProperties([iresult]));
-        });
+            const result = endpoint.postMessage(iresult, transferableProperties([iresult]));
+            if (irequest.type === "RELEASE") {
+                // detached and deactive after send release response above.
+                detachMessageHandler(endpoint, callback);
+                deactiveEndPoint(endpoint);
+            }
+            return result;
+        }
+        attachMessageHandler(endpoint, callback);
     }
     exports.expose = expose;
     function wrapValue(arg) {
@@ -217,6 +231,10 @@ else {factory([], self.Comlink={});}
         if (isMessagePort(endpoint))
             endpoint.start();
     }
+    function deactiveEndPoint(endpoint) {
+        if (isMessagePort(endpoint))
+            endpoint.close();
+    }
     function attachMessageHandler(endpoint, f) {
         // Checking all possible types of `endpoint` manually satisfies TypeScript’s
         // type checker. Not sure why the inference is failing here. Since it’s
@@ -280,6 +298,14 @@ else {factory([], self.Comlink={});}
                 });
             },
             get(_target, property, proxy) {
+                if (property === "releaseProxy") {
+                    return () => {
+                        return cb({
+                            type: "RELEASE",
+                            callPath,
+                        });
+                    };
+                }
                 if (property === "then" && callPath.length === 0) {
                     return { then: () => proxy };
                 }
